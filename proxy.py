@@ -32,6 +32,7 @@ from io import BytesIO
 from http.server import BaseHTTPRequestHandler
 from http.client import HTTPResponse
 from urllib.parse import urlparse
+import getpass
 
 # Manage cryptography
 import random
@@ -62,6 +63,7 @@ SOCKET_TIMEOUT = 2
 
 # Logging defaults to INFO level
 logging.basicConfig(level=logging.INFO)
+
 
 
 class CertManager:
@@ -784,7 +786,7 @@ class ClientToProxyHelper(ConnectionHandler):
         if self.ssock is not None:
             raise RuntimeError("Socket already wrapped.")
 
-        self.context = ssl.SSLContext(ssl.PROTOCOL_TLS)
+        self.context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
         self.context.keylog_filename = SSL_KEYS_DUMP_FILE
 
         if self.remote_host is None:
@@ -1005,27 +1007,19 @@ class Proxy:
             self.logger.debug("Got credentials for %s.", srv_host)
             h = srv_host
 
-        try:
-            domain, user_and_pass = self.creds[h]["creds"].split("/", 1)
-        except ValueError:
-            # No domain specified (no "/" in creds)
-            domain = "."
-            user_and_pass = self.creds[h]["creds"]
+        domain = self.creds[h].get("domain", ".")
 
-        splitted = user_and_pass.split(":", 1)
-        if len(splitted) == 2:
-            username = splitted[0]
-            password = splitted[1]
-
-        elif "hashes" not in self.creds[h]:
+        if "username" in self.creds[h]:
+            username = self.creds[h]["username"]
+            if "password" in self.creds[h]:
+                password = self.creds[h]["password"]
+            else:
+                # We have the username and the hash
+                lmhash = self.creds[h]["lmhash"]
+                nthash = self.creds[h]["nthash"]
+        elif "hashes" not in self.creds[h]: # TODO: condition "len == 1" is no longer valid
             # len == 1 -> no password, need hash
             self.logger.warning("No password nor hash given for %s.", srv_host)
-
-        else:
-            # We have the username and the hash
-            username = splitted[0]
-            lmhash = self.creds[h]["lmhash"]
-            nthash = self.creds[h]["nthash"]
 
         spn = self.creds[h]["spn"] if "spn" in self.creds[h] else None
 
@@ -1215,10 +1209,19 @@ class Proxy:
         self._stop_handling()
 
 
+class PasswordPrompt(argparse.Action):
+    def __call__(self, parser, namespace, values, option_string):
+        if values is None:
+            values = getpass.getpass()
+
+        setattr(namespace, self.dest, values)
+
 def main():
     """
     Entry point.
     """
+
+    default_creds = {"username": "user", "password": "password", "domain": "."}
 
     # Parsing command line arguments
     parser = argparse.ArgumentParser(description="Prox-Ez: The Swiss Army Knife of HTTP auth.")
@@ -1256,21 +1259,27 @@ def main():
                         When this option is specified, --singleprocess is implied.")
 
     # Credentials options
+    parser.add_argument("--username", "-u", default="user", help="Username that will be used to authenticate.")
+    parser.add_argument("--password", action=PasswordPrompt, nargs='?', dest='password', help='Will prompt for the password.')
+    parser.add_argument("--domain", default=".", help="Domain to which the username is joined (e.g. 'WORKGROUP').")
+
     parser.add_argument("--creds",
                         help="""Path to the credentials file, for instance:
 {
     "my.hostname.com": {
-        "creds": "domain/user:password",
+        "domain": "WORKGROUP",
+        "username": "user",
+        "password": "Sup3rSecret!",
         "spn": "HTTP/anothername"
     },
     "my.second.hostname.com": {
-        "creds": "domain1/user1",
+        "domain": "DOMAIN1",
+        "username": "user1",
         "hashes": ":nthash1"
     }
 }
 """)
-    parser.add_argument("--default-creds", "-dc", default="./user:password",
-                        help="Default credentials that will be used to authenticate.")
+
     parser.add_argument("--hashes", help="Could be used instead of password. It is associated with the domain and username given via --default_creds. format: lmhash:nthash or :nthash.")
 
     # Kerberos authentication options
@@ -1315,11 +1324,23 @@ def main():
             print("Error reading credential file:", e)
             exit(1)
     # Default credentials (arbitrarily associated with hostname "_")
-    credentials.update({"_": {"creds": args.default_creds}})
-    if args.hashes is not None:
-        credentials["_"]["hashes"] = args.hashes
-    if args.spn is not None:
-        credentials["_"]["spn"] = args.spn
+
+    if args.username is not None and args.password is not None:
+        credentials.update({
+            "_": {
+                "username": args.username,
+                "password": args.password,
+            }
+        })
+        if args.domain is not None:
+            credentials["_"]["domain"] = args.domain
+
+    if "_" not in credentials:
+        credentials.update({"_": default_creds})
+        if args.hashes is not None:
+            credentials["_"]["hashes"] = args.hashes
+        if args.spn is not None:
+            credentials["_"]["spn"] = args.spn
 
     with Proxy(
             args.listen_address,
