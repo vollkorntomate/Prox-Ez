@@ -32,6 +32,7 @@ from io import BytesIO
 from http.server import BaseHTTPRequestHandler
 from http.client import HTTPResponse
 from urllib.parse import urlparse
+import getpass
 
 # Manage cryptography
 import random
@@ -62,6 +63,7 @@ SOCKET_TIMEOUT = 2
 
 # Logging defaults to INFO level
 logging.basicConfig(level=logging.INFO)
+
 
 
 class CertManager:
@@ -1207,10 +1209,19 @@ class Proxy:
         self._stop_handling()
 
 
+class PasswordPrompt(argparse.Action):
+    def __call__(self, parser, namespace, values, option_string):
+        if values is None:
+            values = getpass.getpass()
+
+        setattr(namespace, self.dest, values)
+
 def main():
     """
     Entry point.
     """
+
+    default_creds = {"username": "user", "password": "password", "domain": "."}
 
     # Parsing command line arguments
     parser = argparse.ArgumentParser(description="Prox-Ez: The Swiss Army Knife of HTTP auth.")
@@ -1249,7 +1260,7 @@ def main():
 
     # Credentials options
     parser.add_argument("--username", "-u", default="user", help="Username that will be used to authenticate.")
-    # TODO: password: prompt (maybe with getpass)
+    parser.add_argument("--password", action=PasswordPrompt, nargs='?', dest='password', help='Will prompt for the password.')
     parser.add_argument("--domain", default=".", help="Domain to which the username is joined (e.g. 'WORKGROUP').")
 
     parser.add_argument("--creds",
@@ -1268,8 +1279,7 @@ def main():
     }
 }
 """)
-    parser.add_argument("--default-creds", "-dc", default="./user:password",
-                        help="Default credentials that will be used to authenticate.")
+
     parser.add_argument("--hashes", help="Could be used instead of password. It is associated with the domain and username given via --default_creds. format: lmhash:nthash or :nthash.")
 
     # Kerberos authentication options
@@ -1314,19 +1324,23 @@ def main():
             print("Error reading credential file:", e)
             exit(1)
     # Default credentials (arbitrarily associated with hostname "_")
+
+    if args.username is not None and args.password is not None:
+        credentials.update({
+            "_": {
+                "username": args.username,
+                "password": args.password,
+            }
+        })
+        if args.domain is not None:
+            credentials["_"]["domain"] = args.domain
+
     if "_" not in credentials:
-        credentials.update({"_": {"creds": args.default_creds}})
+        credentials.update({"_": default_creds})
         if args.hashes is not None:
             credentials["_"]["hashes"] = args.hashes
         if args.spn is not None:
             credentials["_"]["spn"] = args.spn
-
-
-    # TODO:
-    # split creds into domain, username, password
-    # split "dc" arg accordingly
-    # adapt _get_creds
-    # update README
 
     with Proxy(
             args.listen_address,
