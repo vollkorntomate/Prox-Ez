@@ -784,7 +784,7 @@ class ClientToProxyHelper(ConnectionHandler):
         if self.ssock is not None:
             raise RuntimeError("Socket already wrapped.")
 
-        self.context = ssl.SSLContext(ssl.PROTOCOL_TLS)
+        self.context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
         self.context.keylog_filename = SSL_KEYS_DUMP_FILE
 
         if self.remote_host is None:
@@ -1250,7 +1250,7 @@ def main():
     # Credentials options
     parser.add_argument("--username", "-u", default="user", help="Username that will be used to authenticate.")
     # TODO: password: prompt (maybe with getpass)
-    parser.add_argument("--domain", "-d", default=".", help="Domain to which the username is joined (e.g. 'WORKGROUP').")
+    parser.add_argument("--domain", default=".", help="Domain to which the username is joined (e.g. 'WORKGROUP').")
 
     parser.add_argument("--creds",
                         help="""Path to the credentials file, for instance:
